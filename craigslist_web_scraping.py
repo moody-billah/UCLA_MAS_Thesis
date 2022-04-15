@@ -24,7 +24,7 @@ def web_scraping(index, page_url, page_id):
     
     #Initiating the web scraper for the url
     
-    url = page_url[0]
+    url = page_url[index]
     page = requests.get(url)
     parser = BeautifulSoup(page.content, "html.parser")
     
