@@ -1,0 +1,405 @@
+---
+title: "Thesis Analysis Code"
+author: "Moody Billah"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(DBI)
+library(RMySQL)
+library(sqldf)
+library(tidyverse)
+library(car)
+library(Rmisc)
+```
+
+Reading and cleaning web scraped data with 719 observations
+
+```{r}
+con = dbConnect(MySQL(), user='root', password='root', dbname='craigslist_web_scraping', host='localhost')
+query = "select rent, bedrooms, sq_feet, page_date from listings l join webpages w on l.page_ID = w.page_ID where rent > 0"
+craigslist_df = dbGetQuery(con, query)
+
+craigslist_df = mutate(craigslist_df, bedrooms = ifelse(bedrooms < 0, 0, bedrooms))
+craigslist_df = mutate(craigslist_df, bedrooms = ifelse(bedrooms > 5, 5, bedrooms))
+craigslist_df = mutate(craigslist_df, sq_feet = ifelse(sq_feet < 0, NA, sq_feet))
+craigslist_df$bedrooms = as.factor(craigslist_df$bedrooms)
+
+dim(craigslist_df)
+head(craigslist_df)
+```
+
+Creating pandemic variable with the cutoff at date at 2020-03-11
+
+```{r}
+craigslist_df$page_date = as.Date(craigslist_df$page_date, format="%Y-%m-%d")
+craigslist_df$pandemic = as.factor(ifelse(craigslist_df$page_date >= "2020-03-11", 1, 0))
+```
+
+Overall distribution
+
+```{r}
+ggplot(craigslist_df, aes(x=rent)) + geom_histogram(binwidth=100) + ggtitle("Distribution of Overall Rent")
+```
+
+Distributions by pandemic
+
+```{r}
+ggplot(craigslist_df, aes(x=rent, fill=pandemic)) + geom_histogram(binwidth=100) + ggtitle("Distribution of Rent by Pandemic")
+```
+
+Significant difference pre and post pandemic (ANOVA assumptions met)
+
+```{r}
+aov_pandemic = aov(rent ~ pandemic, craigslist_df)
+summary(aov_pandemic)
+```
+
+```{r}
+plot(aov_pandemic, which=c(2,3))
+```
+
+
+Distribution by bedrooms
+
+```{r}
+ggplot(craigslist_df, aes(x=rent, fill=bedrooms)) + geom_histogram(binwidth=100) + ggtitle("Distribution of Rent by Bedrooms")
+```
+
+Significant difference between bedrooms (ANOVA assumptions met)
+
+```{r}
+aov_bedrooms = aov(rent ~ bedrooms, craigslist_df)
+summary(aov_bedrooms)
+```
+
+```{r}
+plot(aov_bedrooms, which=c(2,3))
+```
+
+Distribution by pandemic and bedrooms
+
+```{r}
+pre_pandemic = filter(craigslist_df, pandemic == 0)
+post_pandemic = filter(craigslist_df, pandemic == 1)
+
+ggplot(pre_pandemic, aes(x=rent, fill=bedrooms)) + geom_histogram(binwidth=100) + ggtitle("Distribution of Rent by Bedrooms Pre Pandemic")
+```
+
+```{r}
+ggplot(post_pandemic, aes(x=rent, fill=bedrooms)) + geom_histogram(binwidth=100) + ggtitle("Distribution of Rent by Bedrooms Post Pandemic")
+```
+
+No significant interaction between pandemic and bedrooms (ANOVA assumptions met)
+
+```{r}
+aov_pan_bed = aov(rent ~ pandemic*bedrooms, craigslist_df)
+summary(aov_pan_bed)
+```
+
+```{r}
+plot(aov_pan_bed, which=c(2,3))
+```
+
+
+Square feet and bedrooms have high multicollinearity so square feet will be ignored from analysis (linear regression assumptions met)
+
+```{r}
+lm_sq_bed = lm(rent ~ sq_feet + bedrooms + pandemic, craigslist_df)
+summary(lm_sq_bed)
+vif(lm_sq_bed)
+```
+
+```{r}
+plot(lm_sq_bed, which=c(1,2))
+```
+
+Generating ACS bedroom data pre pandemic
+
+```{r}
+set.seed(100)
+acs_beds_prepan = sample(c(0,1,2,3,4,5), length(pre_pandemic$bedrooms), replace=T, 
+                         prob=c(0.071,0.191,0.299,0.283,0.123,0.033))
+```
+
+Generating ACS bedroom data post pandemic
+
+```{r}
+set.seed(100)
+acs_beds_postpan = sample(c(0,1,2,3,4,5), length(post_pandemic$bedrooms), replace=T, 
+                         prob=c(0.072,0.192,0.298,0.281,0.123,0.034))
+```
+
+Creating function to generate ACS rent data
+
+```{r}
+acs_generate_rent = function(rindex, max_rent, n){
+  acs_rent = rep(0, n)
+  for (i in 1:n){
+  acs_rent[i] = case_when(
+    rindex[i] == 1 ~ runif(1, 0, 499),
+    rindex[i] == 2 ~ runif(1, 500, 999),
+    rindex[i] == 3 ~ runif(1, 1000, 1499),
+    rindex[i] == 4 ~ runif(1, 1500, 1999),
+    rindex[i] == 5 ~ runif(1, 2000, 2499),
+    rindex[i] == 6 ~ runif(1, 2500, 2999),
+    rindex[i] == 7 ~ runif(1, 3000, max_rent)
+    )
+  }
+  return(acs_rent)
+}
+```
+
+Generating ACS rent data pre pandemic
+
+```{r}
+set.seed(100)
+rindex_prepan = sample(c(1,2,3,4,5,6,7), length(pre_pandemic$bedrooms), replace=T, 
+                       prob=c(0.046,0.147,0.334,0.243,0.122,0.057,0.052))
+
+acs_rent_prepan = acs_generate_rent(rindex_prepan, max(pre_pandemic$rent), length(pre_pandemic$rent))
+```
+
+Generating ACS rent data post pandemic
+
+```{r}
+set.seed(100)
+rindex_postpan = sample(c(1,2,3,4,5,6,7), length(post_pandemic$bedrooms), replace=T, 
+                        prob=c(0.045,0.127,0.311,0.253,0.135,0.065,0.064))
+
+acs_rent_postpan = acs_generate_rent(rindex_postpan, max(post_pandemic$rent), length(post_pandemic$rent))
+```
+
+Distribution of ACS rent 
+
+```{r}
+acs_df = rbind(data.frame(rent=acs_rent_prepan, pandemic=as.factor(0)), 
+               data.frame(rent=acs_rent_postpan, pandemic=as.factor(1)))
+
+ggplot(acs_df, aes(x=rent)) + geom_histogram(binwidth=100) + ggtitle("Distribution of Overall ACS Rent")
+```
+
+Distribution of ACS rent by pandemic
+
+```{r}
+ggplot(acs_df, aes(x=rent, fill=pandemic)) + geom_histogram(binwidth=100) + ggtitle("Distribution of ACS Rent by Pandemic")
+```
+
+No significant difference on ACS pre and post pandemic (normality assumption skewed right)
+
+```{r}
+aov_acs_pandemic = aov(rent ~ pandemic, acs_df)
+summary(aov_acs_pandemic)
+```
+
+```{r}
+plot(aov_acs_pandemic, which=c(2,3))
+```
+
+Significant difference between ACS and Craigslist rent overall
+
+```{r}
+t.test(craigslist_df$rent, acs_df$rent)
+```
+
+```{r}
+ggplot() + geom_histogram(data=craigslist_df, aes(x=rent, fill="Craigslist"), binwidth=100, alpha=0.5) + 
+  geom_histogram(data=acs_df, aes(x=rent, fill="ACS"), binwidth=100, alpha=0.5) + 
+  ggtitle("Distribution of Overall ACS vs Craigslist Rent") + scale_fill_discrete(name="source")
+```
+
+Significant difference between ACS and Craigslist rent pre pandemic
+
+```{r}
+t.test(pre_pandemic$rent, acs_rent_prepan)
+```
+
+```{r}
+prepan_acs = filter(acs_df, pandemic == 0)
+
+ggplot() + geom_histogram(data=pre_pandemic, aes(x=rent, fill="Craigslist"), binwidth=100, alpha=0.5) + 
+  geom_histogram(data=prepan_acs, aes(x=rent, fill="ACS"), binwidth=100, alpha=0.5) + 
+  ggtitle("Distribution of Pre Pandemic ACS vs Craigslist Rent") + scale_fill_discrete(name="source")
+```
+
+Significant difference between ACS and Craigslist rent post pandemic
+
+```{r}
+t.test(post_pandemic$rent, acs_rent_postpan)
+```
+
+```{r}
+postpan_acs = filter(acs_df, pandemic == 1)
+
+ggplot() + geom_histogram(data=post_pandemic, aes(x=rent, fill="Craigslist"), binwidth=100, alpha=0.5) + 
+  geom_histogram(data=postpan_acs, aes(x=rent, fill="ACS"), binwidth=100, alpha=0.5) + 
+  ggtitle("Distribution of Post Pandemic ACS vs Craigslist Rent") + scale_fill_discrete(name="source")
+```
+
+Getting 95% confidence interval of Craigslist rent by bedroom
+
+```{r}
+beds = sort(unique(craigslist_df$bedrooms))
+upper = mean = lower = rep(0, length(beds))
+
+for (i in 1:length(beds)){
+  bed_rent = craigslist_df %>% filter(bedrooms == i-1) %>% select(rent)
+  upper[i] = CI(bed_rent$rent)[1]
+  mean[i] = CI(bed_rent$rent)[2]
+  lower[i] = CI(bed_rent$rent)[3]
+}
+
+beds_confint = cbind.data.frame(beds, lower, mean, upper)
+beds_confint
+```
+
+Getting the percentiles from overall rent by bedroom using 95% confidence interval bounds
+
+```{r}
+beds_confint$lower_percent = ecdf(craigslist_df$rent)(beds_confint$lower)
+beds_confint$upper_percent = ecdf(craigslist_df$rent)(beds_confint$upper)
+beds_confint
+```
+
+Creating function to associated ACS rent with bedrooms using Gibbs sampling
+
+```{r}
+lower_pct = beds_confint$lower_percent
+upper_pct = beds_confint$upper_percent
+
+gibbs_sampler = function(acs_beds, acs_rent, lower_pct, upper_pct){
+  acs_rentbed = rep(0, length(acs_beds))
+  t = 1
+  while (t <= 100){
+    for (i in 1:length(acs_beds)){
+      beds_val = acs_beds[i]
+      lower_cut = quantile(acs_rent, lower_pct[beds_val+1])
+      upper_cut = quantile(acs_rent, upper_pct[beds_val+1])
+      cut_df = data.frame("rent" = acs_rent) %>% filter(rent >= lower_cut, rent <= upper_cut)
+      acs_rentbed[i] = sample(cut_df$rent, 1)
+    }
+    t = t + 1
+  }
+  return(acs_rentbed)
+}
+```
+
+Simulating Gibbs sample for pre pandemic ACS rent
+
+```{r}
+set.seed(100)
+acs_rentbed_prepan = gibbs_sampler(acs_beds_prepan, acs_rent_prepan, lower_pct, upper_pct)
+```
+
+Simulating Gibbs sample for post pandemic ACS rent
+
+```{r}
+set.seed(100)
+acs_rentbed_postpan = gibbs_sampler(acs_beds_postpan, acs_rent_postpan, lower_pct, upper_pct)
+```
+
+Distribution of ACS rent by bedroom pre pandemic
+
+```{r}
+acs_sim_prepan = data.frame("bedrooms" = as.factor(acs_beds_prepan), "rent" = acs_rentbed_prepan)
+
+ggplot(acs_sim_prepan, aes(x=rent, fill=bedrooms)) + geom_histogram(binwidth=300) + ggtitle("Distribution of ACS Rent by Bedrooms Pre Pandemic")
+```
+
+Distribution of ACS rent by bedroom post pandemic
+
+```{r}
+acs_sim_postpan = data.frame("bedrooms" = as.factor(acs_beds_postpan), "rent" = acs_rentbed_postpan)
+
+ggplot(acs_sim_postpan, aes(x=rent, fill=bedrooms)) + geom_histogram(binwidth=300) + ggtitle("Distribution of ACS Rent by Bedrooms Post Pandemic")
+```
+
+Distribution of ACS rent by bedroom overall
+
+```{r}
+acs_sim_df = rbind.data.frame(acs_sim_prepan, acs_sim_postpan)
+
+ggplot(acs_sim_df, aes(x=rent, fill=bedrooms)) + geom_histogram(binwidth=300) + ggtitle("Distribution of ACS Rent by Bedrooms Overall")
+```
+
+Significant difference between Craigslist and ACS for 0 bedroom
+
+```{r}
+cl_b0 = craigslist_df %>% filter(bedrooms == 0) %>% select(rent)
+acs_b0 = acs_sim_df %>% filter(bedrooms == 0) %>% select(rent)
+
+t.test(cl_b0$rent, acs_b0$rent)
+```
+
+```{r}
+ggplot() + geom_histogram(data=cl_b0, aes(x=rent, fill="Craigslist"), binwidth=100, alpha=0.5) + 
+  geom_histogram(data=acs_b0, aes(x=rent, fill="ACS"), binwidth=100, alpha=0.5) + 
+  ggtitle("Distribution of 0 Bedroom ACS vs Craigslist Rent") + scale_fill_discrete(name="source")
+```
+
+Significant difference between Craigslist and ACS for 1 bedroom
+
+```{r}
+cl_b1 = craigslist_df %>% filter(bedrooms == 1) %>% select(rent)
+acs_b1 = acs_sim_df %>% filter(bedrooms == 1) %>% select(rent)
+
+t.test(cl_b1$rent, acs_b1$rent)
+```
+
+```{r}
+ggplot() + geom_histogram(data=cl_b1, aes(x=rent, fill="Craigslist"), binwidth=100, alpha=0.5) + 
+  geom_histogram(data=acs_b1, aes(x=rent, fill="ACS"), binwidth=100, alpha=0.5) + 
+  ggtitle("Distribution of 1 Bedroom ACS vs Craigslist Rent") + scale_fill_discrete(name="source")
+```
+
+Significant difference between Craigslist and ACS for 2 bedroom
+
+```{r}
+cl_b2 = craigslist_df %>% filter(bedrooms == 2) %>% select(rent)
+acs_b2 = acs_sim_df %>% filter(bedrooms == 2) %>% select(rent)
+
+t.test(cl_b2$rent, acs_b2$rent)
+```
+
+```{r}
+ggplot() + geom_histogram(data=cl_b2, aes(x=rent, fill="Craigslist"), binwidth=100, alpha=0.5) + 
+  geom_histogram(data=acs_b2, aes(x=rent, fill="ACS"), binwidth=100, alpha=0.5) + 
+  ggtitle("Distribution of 2 Bedroom ACS vs Craigslist Rent") + scale_fill_discrete(name="source")
+```
+
+Significant difference between Craigslist and ACS for 3 bedroom
+
+```{r}
+cl_b3 = craigslist_df %>% filter(bedrooms == 3) %>% select(rent)
+acs_b3 = acs_sim_df %>% filter(bedrooms == 3) %>% select(rent)
+
+t.test(cl_b3$rent, acs_b3$rent)
+```
+
+```{r}
+ggplot() + geom_histogram(data=cl_b3, aes(x=rent, fill="Craigslist"), binwidth=100, alpha=0.5) + 
+  geom_histogram(data=acs_b3, aes(x=rent, fill="ACS"), binwidth=100, alpha=0.5) + 
+  ggtitle("Distribution of 3 Bedroom ACS vs Craigslist Rent") + scale_fill_discrete(name="source")
+```
+
+Significant difference between Craigslist and ACS for 4 bedroom
+
+```{r}
+cl_b4 = craigslist_df %>% filter(bedrooms == 4) %>% select(rent)
+acs_b4 = acs_sim_df %>% filter(bedrooms == 4) %>% select(rent)
+
+t.test(cl_b4$rent, acs_b4$rent)
+```
+
+```{r}
+ggplot() + geom_histogram(data=cl_b4, aes(x=rent, fill="Craigslist"), binwidth=100, alpha=0.5) + 
+  geom_histogram(data=acs_b4, aes(x=rent, fill="ACS"), binwidth=100, alpha=0.5) + 
+  ggtitle("Distribution of 4 Bedroom ACS vs Craigslist Rent") + scale_fill_discrete(name="source")
+```
+
+Not enough data points to investigate difference between Craigslist and ACS for 5 bedroom
+
